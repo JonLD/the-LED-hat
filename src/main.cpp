@@ -26,7 +26,7 @@ const long NUM_LEDS = 30;
 const uint8_t LED_data_pin = 3;
 
 // colour and effect buttons
-const uint8_t EFFECT_PIN_1 = 12;
+const uint8_t EFFECT_PIN_1;
 const uint8_t EFFECT_PIN_2 = 2;
 
 
@@ -38,23 +38,20 @@ const uint8_t BEAT_SYNC_PIN = 12;
 const uint8_t ROUND_BPM_PIN = 11;
 const uint8_t BPM_RE_PIN_A = 8;
 const uint8_t BPM_RE_PIN_B = 9;
-uint8_t bpm_pin_a_current_state = HIGH;
-uint8_t bpm_pin_a_previous_state = bpm_pin_a_current_state;
+
 
 const uint8_t BRIGHTNESS_RE_PIN_A = 5; 
 const uint8_t BRIGHTNESS_RE_PIN_B = 4;
-uint8_t brightness_pin_a_current_state = HIGH;
-uint8_t brightness_pin_a_previous_state = brightness_pin_a_current_state;
+
 
 // brightness parameters
 const uint8_t BRIGHTNESS_LIMIT = 90;
 volatile uint8_t brightness = 30;
-volatile uint8_t oldbrightness;
 volatile bool brightness_muted = false;
-volatile bool brightness_adjusted = true;
+volatile bool brightness_adjusted = true; // adjustment flags initialised as true to flag OLED display update on setup
 volatile bool bpm_adjusted = true;
 volatile bool tap_bpm_adjusted = true;
-volatile bool toggle_brightness_flag = false;
+volatile bool mute_brightness_flag = false;
 
 
 CRGB leds[NUM_LEDS] = {0};
@@ -75,8 +72,8 @@ volatile bool tap_bpm_flag = false;
 
 
 //-------------- live adjust variables //--------------
-double bpm = 123;
-String colour = "Blue"; // predefined colour palletes containing 3 colours each
+volatile double bpm = 123;
+String colour = "yellow"; // predefined colour palletes containing 3 colours each
 volatile bool performance_mode = false;
 
 enum effect_choice : int { // enum encoding effect with whole and half denoting 1 and 1/2 beat length of effect respectively
@@ -119,19 +116,21 @@ enum colour_choice: int {
   green_white = 5,
   blue_white = 6,
   purple = 7,
-  cb = 8
+  cb = 8,
+  yellow = 9,
+  orange = 10
 };
 
-int selected_colour = red;
+int selected_colour = orange; // choose colour pallette (will be used in)
 
-CRGB colour1 = CRGB::Red; // default all colours to red
-CRGB colour2 = CRGB::Red;
-CRGB colour3 = CRGB::Red;
+CRGB colour1 = CRGB::Yellow; // default all colours to red
+CRGB colour2 = CRGB::Yellow;
+CRGB colour3 = CRGB::Yellow;
 
 //-------------- Function prototypes //--------------
-void twinkle_shaker(int a);
-void flash_and_fade(int a);
-void wave_effect(int a);
+void twinkle_shaker(int);
+void flash_and_fade(int);
+void wave_effect(int);
 
 //-------------- OLED display functions //--------------
 void update_bpm_brightness_display() {
@@ -166,6 +165,9 @@ void update_bpm_brightness_display() {
 //-------------- BRIGHTNESS //--------------
 // Interrupt function to adjust brightness of LEDs using rotary encoder
 void adjust_brightness() {
+  static uint8_t brightness_pin_a_current_state = HIGH;
+  static uint8_t brightness_pin_a_previous_state = brightness_pin_a_current_state;
+
   if (!brightness_muted) {
     /*BRIGHTNESS_RE_PIN_A and BRIGHTNESS_RE_PIN_B both defualt to HIGH
     On rotation both pass through LOW to HIGH*/
@@ -188,23 +190,25 @@ void adjust_brightness() {
   }
 }
 
-void flag_toggle_brightness() {
-  toggle_brightness_flag = true;
+void flag_mute_brightness() {
+  mute_brightness_flag = true;
 }
 
-long previous_button_press = 0;
+
 // Interrupt to toggle the brightness to 0 and back to its original value before toggle
-void toggle_brightness() {
+void mute_brightness() {
+  static volatile uint8_t old_brightness;
+  static unsigned long previous_button_press = 0;
   if ((millis() - previous_button_press) > 300){
     if (!brightness_muted) {              // mute brightness if non 0
-      oldbrightness = brightness;
+      old_brightness = brightness;
       brightness = 0;
       FastLED.setBrightness(brightness);
       brightness_adjusted = true;
       brightness_muted = true;
     }
     else {                               // unmute the brightness
-      brightness = oldbrightness;
+      brightness = old_brightness;
       FastLED.setBrightness(brightness);
       brightness_adjusted = true;
       brightness_muted = false;
@@ -218,8 +222,10 @@ void toggle_brightness() {
 void adjust_bpm() {
   /*BRIGHTNESS_RE_PIN_A and BRIGHTNESS_RE_PIN_B both defualt to HIGH
   On rotation both pass through LOW to HIGH*/
-  bpm_pin_a_current_state = digitalRead(BPM_RE_PIN_A);
+  static uint8_t bpm_pin_a_current_state;
+  static uint8_t bpm_pin_a_previous_state;
 
+  bpm_pin_a_current_state = digitalRead(BPM_RE_PIN_A);
   if ((bpm_pin_a_previous_state == LOW) && (bpm_pin_a_current_state == HIGH)) {
 
     // if counter clockwise BRIGHTNESS_RE_PIN_B returns to HIGH before BRIGHTNESS_RE_PIN_A and so will be HIGH
@@ -251,24 +257,19 @@ void attempt_sync() {// enact affect of button interrupt
 }
 
 
-void tap_bpm_isr() {
+void tap_bpm_isr() { // flag tap bpm button press
   tap_bpm_flag = true;
 } 
 
-volatile bool first_tap = true;
-volatile unsigned long last_tap_time = 0;
-volatile double first_tap_time = 0;
-volatile uint8_t tap_count = 0;
 
 void tap_bpm() {
+  static volatile float first_tap_time;
+  static volatile unsigned long last_tap_time;
+  static volatile uint8_t tap_count;
 
-  if (millis() - last_tap_time > 800){
-    first_tap_time = 0;
-    tap_count = 0;
-  }
-
-  if (!first_tap_time) {
+  if (millis() - last_tap_time > 800) { 
     first_tap_time = millis();
+    tap_count = 0;
   }
 
   else if (millis() - last_tap_time > 200) {
@@ -314,6 +315,12 @@ void colour_select() {
     case white:
       colour1 = colour2 = colour3 = CRGB::White;
       break;
+    case yellow:
+      colour1 = colour2 = colour3 = CRGB::Yellow;
+      break;
+    case orange:
+      colour1 = colour2 = colour3 = CRGB::OrangeRed;
+      break;
     case red_white:
       colour1 = colour2 = CRGB::Red;
       colour3 = CRGB::White;
@@ -334,10 +341,10 @@ void colour_select() {
   }
 }
 
-void update_isr_flags() {
-  if (toggle_brightness_flag) {
-    toggle_brightness();
-    toggle_brightness_flag = false;
+void poll_isr_flags() {
+  if (mute_brightness_flag) {
+    mute_brightness();
+    mute_brightness_flag = false;
   }
   if (tap_bpm_flag) {
     tap_bpm();
@@ -435,8 +442,9 @@ void setup()
   pinMode(BRIGHTNESS_RE_PIN_B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BRIGHTNESS_RE_PIN_A), adjust_brightness, CHANGE); // Interupt set to call the brightness adjustment function
   pinMode(BRIGHTNESS_TOGGLE_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BRIGHTNESS_TOGGLE_PIN), flag_toggle_brightness, FALLING);
- 
+  attachInterrupt(digitalPinToInterrupt(BRIGHTNESS_TOGGLE_PIN), flag_mute_brightness, FALLING);
+  
+
   pinMode(BPM_RE_PIN_A, INPUT_PULLUP);
   pinMode(BPM_RE_PIN_B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BPM_RE_PIN_A), adjust_bpm, CHANGE);
@@ -484,7 +492,9 @@ void loop()
 //-------------- LED effects //--------------
 
 // 1
+bool first_polling = true;
 void wave_effect(int note_length) {    // note length is the fraction of a beat you want effect to play for
+
   if (sync_mode == "beat") {           // if sync is on beat mode
       sync_attempt = false;
   }
@@ -493,7 +503,7 @@ void wave_effect(int note_length) {    // note length is the fraction of a beat 
     temp_beat_time = beat_start_time;
     int y = max_y;
     while (((temp_beat_time - beat_start_time) < beat_length/note_length) && (!sync_attempt)) {
-      update_isr_flags(); // check if bpm_brightness display needs updating
+      poll_isr_flags(); // check if bpm_brightness display needs updating
       if (y >= 0) {
         EVERY_N_MILLISECONDS(60) {
           for (int x = 0; x <= max_x; x +=1) { // Fill x row
@@ -516,7 +526,7 @@ void wave_effect(int note_length) {    // note length is the fraction of a beat 
         }
       }
       EVERY_N_MILLIS(2) {
-        fadeToBlackBy(leds, NUM_LEDS, 5);
+        fadeToBlackBy(leds, NUM_LEDS, 10);
         FastLED.show();
       }
       temp_beat_time = millis();
@@ -541,7 +551,7 @@ void flash_and_fade(int note_length) { // Flash LED and decay to 0 every beat_le
     }
     FastLED.show();
     while (((temp_beat_time - beat_start_time) < beat_length / note_length) && (!sync_attempt)) {
-      update_isr_flags();
+      poll_isr_flags();
       EVERY_N_MILLISECONDS(5) {
         fadeToBlackBy(leds, NUM_LEDS, 7);
         FastLED.show();
@@ -560,7 +570,7 @@ void twinkle_shaker(int note_length){ // add new bright spots every quarter note
     beat_start_time = millis();
     temp_beat_time = beat_start_time; 
     while (((temp_beat_time - beat_start_time) < beat_length / note_length) && (!sync_attempt)) {
-      update_isr_flags();
+      poll_isr_flags();
       EVERY_N_MILLIS(beat_length/8){
         fadeToBlackBy(leds, NUM_LEDS, 25);
         FastLED.show();
