@@ -3,21 +3,29 @@
 #include <FastLED.h>
 #include <ArduinoSTL.h>
 
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
 // oled libraries
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_I2CDevice.h>
 #include <Fonts/FreeSans9pt7b.h>
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define OLED_RESET -1    // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 #define FONT FreeSans9pt7b
+const uint8_t SCREEN_WIDTH = 128; // OLED display width, in pixels
+const uint8_t SCREEN_HEIGHT = 64; // OLED display height, in pixels
+const int OLED_RESET = -1;    // Reset pin # (or -1 if sharing Arduino reset pin)
+const int SCREEN_ADDRESS  = 0x3C; ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+
 
 // Declaration for an SSD1306 display
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+// Transciever variables
+RF24 radio(10, 2);
+const byte address[6] = "00001";
 
 // Initialise varialbes needed for FastLED 
 #define LED_TYPE WS2812B
@@ -30,12 +38,12 @@ const uint8_t EFFECT_PIN_1;
 const uint8_t EFFECT_PIN_2 = 2;
 
 
-// rotary encoder (RE) variables
+// ify encoder (RE) variables
 const uint8_t BRIGHTNESS_TOGGLE_PIN = 6;
 const uint8_t SET_BPM_PIN = 7;
-const uint8_t TAP_BPM_PIN = 10;
-const uint8_t BEAT_SYNC_PIN = 12;
-const uint8_t ROUND_BPM_PIN = 11;
+const uint8_t TAP_BPM_PIN;
+const uint8_t BEAT_SYNC_PIN;
+const uint8_t ROUND_BPM_PIN;
 const uint8_t BPM_RE_PIN_A = 8;
 const uint8_t BPM_RE_PIN_B = 9;
 
@@ -47,11 +55,11 @@ const uint8_t BRIGHTNESS_RE_PIN_B = 4;
 // brightness parameters
 const uint8_t BRIGHTNESS_LIMIT = 90;
 volatile uint8_t brightness = 30;
-volatile bool brightness_muted = false;
 volatile bool brightness_adjusted = true; // adjustment flags initialised as true to flag OLED display update on setup
 volatile bool bpm_adjusted = true;
 volatile bool tap_bpm_adjusted = true;
-volatile bool mute_brightness_flag = false;
+volatile bool mute_brightness_flag = false; // mute button flag
+volatile bool brightness_muted = false; // mute brightness state
 
 
 CRGB leds[NUM_LEDS] = {0};
@@ -425,9 +433,14 @@ void play_selected_effect() {
 }
 
 //-------------- SETUP //--------------//--------------//--------------//--------------//--------------//--------------//--------------
-void setup()
-{
+void setup() {
   Serial.begin(9600);
+
+  // transciever setup
+  radio.begin();
+  radio.openWritingPipe(address);
+  radio.setPALevel(RF24_PA_MIN);
+  radio.stopListening();
 
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) { // Address 0x3D for 128x64
     Serial.println(F("SSD1306 allocation failed"));
@@ -436,7 +449,7 @@ void setup()
 
   update_bpm_brightness_display(); // initialise OLED display for brightness and BPM
 
-  // Button and Rotary Ecnoder pin setup
+  // Button and ify Ecnoder pin setup
   // Initialize the pins as an input with arduino nano internal pullup resistors activated
   pinMode(BRIGHTNESS_RE_PIN_A, INPUT_PULLUP);
   pinMode(BRIGHTNESS_RE_PIN_B, INPUT_PULLUP);
@@ -444,7 +457,7 @@ void setup()
   pinMode(BRIGHTNESS_TOGGLE_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BRIGHTNESS_TOGGLE_PIN), flag_mute_brightness, FALLING);
   
-
+  // pin and interrupt setup for ify encoders
   pinMode(BPM_RE_PIN_A, INPUT_PULLUP);
   pinMode(BPM_RE_PIN_B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BPM_RE_PIN_A), adjust_bpm, CHANGE);
@@ -457,10 +470,13 @@ void setup()
   pinMode(BEAT_SYNC_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BEAT_SYNC_PIN), attempt_sync_flag, FALLING);
 
+  // pin and interrupt setup for effect buttons
   pinMode(EFFECT_PIN_1, INPUT_PULLUP);
   pinMode(EFFECT_PIN_2, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(EFFECT_PIN_1), effect_button_1, FALLING);
   attachInterrupt(digitalPinToInterrupt(EFFECT_PIN_2), effect_button_2, FALLING);
+
+
 
   
   // FastLED setup
@@ -471,8 +487,11 @@ void setup()
 //-------------- LOOP //--------------//--------------//--------------//--------------//--------------//--------------//--------------//--------------
 /* loop should contain one bar of effects
 ensure that all the first arguments (note length) sum to 4*/
-void loop()
-{
+void loop() {
+  const char text[] = "Hello Fucker!";
+  radio.write(&text, sizeof(text));
+  delay(1000);
+
   colour_select();
   if (sync_mode == "bar") {
     sync_attempt = false;
