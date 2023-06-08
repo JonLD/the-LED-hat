@@ -3,7 +3,7 @@
 ## Introduction
 Still under development. This project was undertaken to develop a visually interesting hat with embedded LEDs for music events such as festivals.
 
-The project uses two "Arduino Nano Every"s, one in the hat and another in a controller, communicating via RF transcievers. The controller consists of a set of buttons, rotary encoders and OLED displays to adjust adjust lighting effect parameters.
+The project uses two Arduino Nano Every's, one in the hat and another in a controller, communicating via RF transcievers. The controller consists of a set of buttons, rotary encoders and OLED displays to adjust adjust lighting effect parameters.
 
 ## Hardware
 Currently being prototyped using several solderable breadboards. Currently setup to be powered either via an external power supply unit or a battery pack.
