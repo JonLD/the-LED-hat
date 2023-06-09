@@ -2,11 +2,14 @@
 #include <FastLED.h>
 #include <ArduinoSTL.h>
 
+#include <interface.h>
+
 #include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
 RF24 radio(7, 8); // CE, CSN
 const byte address[6] = "00001";
+radioData_t radioData;
 
 // oled libraries
 #include <Wire.h>
@@ -15,22 +18,22 @@ const byte address[6] = "00001";
 #include <Adafruit_I2CDevice.h>
 
 volatile uint8_t brightness = 30;
-double bpm = 122;
+double bpm = 123;
 
 bool sync_attempt = false;
 long beat_length = lround((60/bpm)*1000);
-long timing_error = 40;
+long timing_error = 44;
 
 
-
-CRGB colour1 = CRGB::Blue; // default all colours to red
+// default all colours to blue
+CRGB colour1 = CRGB::Blue;
 CRGB colour2 = CRGB::Blue;
 CRGB colour3 = CRGB::Blue;
 
 // Initialise varialbes needed for FastLED 
 #define LED_TYPE WS2812B
 #define COLOR_ORDER GRB
-const long NUM_LEDS = 150;
+const long NUM_LEDS = 140;
 const uint8_t LED_DATA_PIN = 2;
 
 
@@ -40,36 +43,42 @@ const uint8_t MAX_X = 34;
 const uint8_t MAX_Y = 3;
 
 enum effect_choice : int { // enum encoding effect with whole and half denoting 1 and 1/2 beat length of effect respectively
-  clear_display, // clear all leds
-  wave_whole, // vertically rising horizontal wave with fading tail
-  wave_half,
-  flash_whole, // flash of vertical lines
-  flash_half,
-  twinkle_whole, // bright spots lighting every 16th note and slowing fading
-  twinkle_half,
-  strobe_whole
+    clear_display, // clear all leds
+    wave_whole, // vertically rising horizontal wave with fading tail
+    wave_half,
+    flash_whole, // flash of vertical lines
+    flash_half,
+    twinkle_whole, // bright spots lighting every 16th note and slowing fading
+    twinkle_half,
+    strobe_whole
 };
 
-int wave_flash_double[] = {wave_whole, clear_display, flash_whole, clear_display, wave_whole, clear_display, flash_half, flash_half};
-int just_flash[] = {flash_whole, clear_display,flash_whole, clear_display, flash_whole, clear_display, flash_whole, clear_display};
+int wave_flash_double[] = {wave_whole, clear_display, flash_whole, clear_display, wave_whole,
+                           clear_display, flash_half, clear_display, flash_half, clear_display};
+int just_flash[] = {flash_whole, flash_whole, flash_whole, flash_whole};
 int twinkle[] = {twinkle_whole, twinkle_whole, twinkle_whole, twinkle_whole};
 int just_wave[] = {wave_whole, wave_whole, wave_whole, wave_whole,};
 int wave_double[] = {wave_whole,wave_whole, wave_whole, wave_half, wave_half};
+int double_flash_n_wave = {};
 int strobe_bar[] = {strobe_whole, strobe_whole, strobe_whole, strobe_whole};
-int *selected_array = just_flash;
+int strobe_colour[] = {};
 
 enum colour_effect : long {  
-  white,
-  red,
-  green,
-  blue,
-  red_white,
-  green_white,
-  blue_white,
-  purple,
-  cb,
-  yellow,
-  orange,
+  white = 0,
+  red = 7,
+  green = 11,
+  blue = 3,
+  red_white = 6,
+  green_white = 10,
+  blue_white = 2,
+  purple = 1,
+  cb = 12,
+  yellow = 8,
+  orange = 5,
+  cd = 13,
+  fire = 4,
+  purue = 14,
+  blue_red = 15,
   enum_wave_flash_double = 16,
   enum_just_flash = 17,
   enum_just_wave = 18,
@@ -77,8 +86,10 @@ enum colour_effect : long {
   enum_twinkle = 21,
   enum_strobe_bar = 20
 };
-enum colour_effect selected_effect = enum_just_flash;
+
+enum colour_effect selected_effect = enum_just_wave;
 enum colour_effect selected_colour = blue; // choose colour pallette (will be used in)
+
 //-------------- Function prototypes //--------------
 void twinkle_shaker(int);
 void flash_and_fade(int);
@@ -126,57 +137,75 @@ void colour_select() {
       colour3 = CRGB::White;
       break;
     case cb:
-      colour1 = CRGB::Orange;
+      colour1 = CRGB::OrangeRed;
       colour2 = CRGB::Green;
       colour3 = CRGB::Purple;
       break;
+    case cd:
+      colour1 = CRGB::Yellow;
+      colour2 = CRGB::Blue;
+      colour3 = CRGB::Purple;
+      break;
+    case fire:
+      colour1 = CRGB::Yellow;
+      colour2 = CRGB::Red;
+      colour3 = CRGB::OrangeRed;
+      break;
+    case purue:
+      colour1 = CRGB::Purple;
+      colour2 = CRGB::Red;
+      colour3 = CRGB::Blue;
+      break;
+    case blue_red:
+      colour1 = colour2 = CRGB::Blue;
+      colour3 = CRGB::Red;
   }
 }
 
 long text = "";
-bool new_message = false;
-void read_radio() {
-  if (radio.available()) {
-    radio.read(&text, sizeof(text));
-    new_message = true;
-    Serial.println(text);
-  }
+bool read_radio() {
+    bool radio_available = radio.available();
+    if (radio_available) {
+        radio.read(&text, sizeof(text));
+        Serial.println(text);
+    }
+    return radio_available;
 }
 
 
-void poll() {
-  read_radio();
-  if (new_message) {
-    if (text == 3000) {
+void poll_radio() {
+  if (read_radio()) 
+  {
+    if (text == 3000) 
+    {
       sync_attempt = true;
-      new_message = false;
     }
-    else if (text > 1000 && text < 2000) {
+    else if (text > 1000 && text < 2000) 
+    {
       beat_length = text - 1000;
       Serial.print("new beat_length");
       Serial.println(beat_length);
-      new_message = false;
     }
-    else if (text <= 256) {
+    else if (text <= 256) 
+    {
       brightness = text;
       FastLED.setBrightness(brightness);
       Serial.print("new brightness");
       Serial.println(brightness);
-      new_message = false;
     }
-    else if (text >= 2000 && text < 3000) {
+    else if (text >= 2000 && text < 3000) 
+    {
       long selection = text - 2000;
-      if (selection <= 10) {
+      if (selection <= 15) {
         selected_colour = selection;
         Serial.print("selected_colour\t");
         Serial.println(selected_colour);
-        new_message = false;
       }
-      else if (selection >= 16 && selection <= 21) {
+      else if (selection >= 16 && selection <= 31) 
+      {
         selected_effect = selection;
         Serial.print("selected_effect\t");
         Serial.println(selection);
-        new_message = false;
       }
     }
   }
@@ -274,8 +303,6 @@ void loop() {
   sync_attempt = false;
   colour_select();
   play_selected_effect();
-  Serial.print("Bar length (ms):\t");
-  Serial.println(millis() - start_time);
 
 }
 
@@ -285,9 +312,12 @@ void loop() {
 //-------------- LED effects //--------------
 unsigned long beat_start_time;
 unsigned long temp_beat_time;
-void effect_overflow_guard_fastled_show(int note_length) {
-  if ((((beat_length / note_length) - timing_error) - (temp_beat_time - beat_start_time)) > 7) {
+void guarded_fastled_show(int note_length) {
+  if ((((beat_length - timing_error) /note_length) - (temp_beat_time - beat_start_time)) > 7) {
     FastLED.show();
+  }
+  else {
+    Serial.print("Ahhh");
   }
 }
 
@@ -297,8 +327,8 @@ void wave_effect(int note_length) {    // note length is the fraction of a beat 
     beat_start_time = millis();
     temp_beat_time = beat_start_time;
     int y = MAX_Y;
-    while (((temp_beat_time - beat_start_time) < beat_length/note_length) && (!sync_attempt)) {
-      poll(); // check if bpm_brightness display needs updating
+    while (((temp_beat_time - beat_start_time) < (beat_length - timing_error)/note_length) && (!sync_attempt)) {
+      poll_radio(); // check if bpm_brightness display needs updating
       if (y >= 0) {
         EVERY_N_MILLISECONDS(60) {
           for (int x = 0; x <= MAX_X; x +=1) { // Fill x row
@@ -316,25 +346,37 @@ void wave_effect(int note_length) {    // note length is the fraction of a beat 
               leds[map_XY(x,y)] = colour3;
             }
           }
-          FastLED.show();
+          guarded_fastled_show(note_length);
           y-=1;
         }
       }
       EVERY_N_MILLIS(2) {
         fadeToBlackBy(leds, NUM_LEDS, 10);
-        FastLED.show();
+        guarded_fastled_show(note_length);
       }
       temp_beat_time = millis();
     }
+    unsigned long actual_beat_length = (temp_beat_time - beat_start_time);
+    unsigned long adjust_target_length = (beat_length - timing_error) / note_length;
+    Serial.print("Actual Beat length:\t");
+    Serial.println(actual_beat_length);
+    Serial.print("Target Beat length:\t");
+    Serial.println(beat_length);
   }
 }
 
 // 2
-unsigned long start_poll_time;
+unsigned long demon_adjuster = 0;
 void flash_and_fade(int note_length) { // Flash LED and decay to 0 every beat_length seconds
   if (!sync_attempt) { 
     unsigned long beat_start_time = millis();
     unsigned long temp_beat_time = beat_start_time;      
+  if (note_length == 1) {
+    demon_adjuster = 5;
+  }
+  else {
+    demon_adjuster = 0;
+  }
 
     for (int x = 0; x <= MAX_X; x +=2) { // fill x 
       for(int y = 0; y<= MAX_Y; y++){    // fill y
@@ -342,26 +384,44 @@ void flash_and_fade(int note_length) { // Flash LED and decay to 0 every beat_le
       } 
     }
     FastLED.show();
-    unsigned long poll_millis_count = 0;
-    while (((temp_beat_time - beat_start_time) < (beat_length / note_length)- timing_error) && (!sync_attempt)) {
-      poll();
-    EVERY_N_MILLISECONDS(5) {
-        fadeToBlackBy(leds, NUM_LEDS, 7);
-        FastLED.show();
+    while (((temp_beat_time - beat_start_time) < ((beat_length - (timing_error + demon_adjuster)) / note_length)) && (!sync_attempt)) {
+      poll_radio();
+      EVERY_N_MILLIS(5) {
+        fadeToBlackBy(leds, NUM_LEDS, 10);
+        if (note_length == 1) {
+          FastLED.show();
+        }
+        else {
+          guarded_fastled_show(note_length);
+        }
       }
       temp_beat_time = millis();
     }
-    Serial.print("Beat length:\t");
-    Serial.println(temp_beat_time - beat_start_time);
+    unsigned long actual_beat_length = (temp_beat_time - beat_start_time);
+    unsigned long adjust_target_length = (beat_length - timing_error) / note_length;
+    Serial.print("Actual Beat length:\t");
+    Serial.println(actual_beat_length);
+    Serial.print("Target Beat length:\t");
+    Serial.println(beat_length);
+    
+    // if (actual_beat_length > adjust_target_length) {
+    //   timing_error -= actual_beat_length - adjust_target_length;
+    // }
+    // else if(actual_beat_length < adjust_target_length){
+    //   timing_error += actual_beat_length - adjust_target_length;
+    // }
+    // Serial.print("timing_error:\t");
+    // Serial.println(timing_error);
   }
 }
+
  // 3
 void twinkle_shaker(int note_length){ // add new bright spots every quarter note
   if (!sync_attempt) { 
     unsigned long beat_start_time = millis();
     unsigned long temp_beat_time = beat_start_time; 
     while (((temp_beat_time - beat_start_time) < beat_length / note_length) && (!sync_attempt)) {
-      poll();
+      poll_radio();
       EVERY_N_MILLIS(beat_length/8){
         fadeToBlackBy(leds, NUM_LEDS, 25);
         FastLED.show();
@@ -396,17 +456,17 @@ void strobe(int note_length) { // Flash LED and decay to 0 every beat_length sec
     unsigned long beat_start_time = millis();
     unsigned long temp_beat_time = beat_start_time;      
     while (((temp_beat_time - beat_start_time) < beat_length) && (!sync_attempt)) {
-      poll();
+      poll_radio();
 
       FastLED.clear();
       EVERY_N_MILLISECONDS(50) {
         fill_solid(leds, NUM_LEDS, CRGB::White);
-        FastLED.show();
+        guarded_fastled_show(note_length);
       }
 
       EVERY_N_MILLISECONDS(100) {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
+        guarded_fastled_show(note_length);
       }
       temp_beat_time = millis();
     }
